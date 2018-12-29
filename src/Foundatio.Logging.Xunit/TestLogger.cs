@@ -4,6 +4,7 @@ using System.Collections.Immutable;
 using System.Linq;
 using System.Threading;
 using Foundatio.Utility;
+using Microsoft.Extensions.Logging;
 
 namespace Foundatio.Logging.Xunit {
     internal class TestLogger : ILogger {
@@ -19,37 +20,35 @@ namespace Foundatio.Logging.Xunit {
             if (!_loggerFactory.IsEnabled(_categoryName, logLevel))
                 return;
 
-            var scopes = CurrentScopeStack.Reverse().ToArray();
+            object[] scopes = CurrentScopeStack.Reverse().ToArray();
             var logEntry = new LogEntry {
                 Date = SystemClock.UtcNow,
                 LogLevel = logLevel,
                 EventId = eventId,
                 State = state,
                 Exception = exception,
-                Message = formatter(state, exception),
+                Formatter = (s, e) => formatter((TState)s, e),
                 CategoryName = _categoryName,
                 Scopes = scopes
             };
 
-            var logData = state as LogData;
-            if (logData != null) {
-                logEntry.Properties["CallerMemberName"] = logData.MemberName;
-                logEntry.Properties["CallerFilePath"] = logData.FilePath;
-                logEntry.Properties["CallerLineNumber"] = logData.LineNumber;
+            switch (state) {
+                //case LogData logData:
+                //    logEntry.Properties["CallerMemberName"] = logData.MemberName;
+                //    logEntry.Properties["CallerFilePath"] = logData.FilePath;
+                //    logEntry.Properties["CallerLineNumber"] = logData.LineNumber;
 
-                foreach (var property in logData.Properties)
-                    logEntry.Properties[property.Key] = property.Value;
-            } else {
-                var logDictionary = state as IDictionary<string, object>;
-                if (logDictionary != null) {
+                //    foreach (var property in logData.Properties)
+                //        logEntry.Properties[property.Key] = property.Value;
+                //    break;
+                case IDictionary<string, object> logDictionary:
                     foreach (var property in logDictionary)
                         logEntry.Properties[property.Key] = property.Value;
-                }
+                    break;
             }
 
-            foreach (var scope in scopes) {
-                var scopeData = scope as IDictionary<string, object>;
-                if (scopeData == null)
+            foreach (object scope in scopes) {
+                if (!(scope is IDictionary<string, object> scopeData))
                     continue;
 
                 foreach (var property in scopeData)
@@ -60,7 +59,14 @@ namespace Foundatio.Logging.Xunit {
         }
 
         public bool IsEnabled(LogLevel logLevel) {
-            return logLevel >= _loggerFactory.MinimumLevel;
+            return _loggerFactory.IsEnabled(_categoryName, logLevel);
+        }
+
+        public IDisposable BeginScope<TState>(TState state) {
+            if (state == null)
+                throw new ArgumentNullException(nameof(state));
+
+            return Push(state);
         }
 
         public IDisposable BeginScope<TState, TScope>(Func<TState, TScope> scopeFactory, TState state) {
@@ -77,8 +83,8 @@ namespace Foundatio.Logging.Xunit {
         }
 
         private static ImmutableStack<object> CurrentScopeStack {
-            get { return _currentScopeStack.Value?.Value ?? ImmutableStack.Create<object>(); }
-            set { _currentScopeStack.Value = new Wrapper { Value = value }; }
+            get => _currentScopeStack.Value?.Value ?? ImmutableStack.Create<object>();
+            set => _currentScopeStack.Value = new Wrapper { Value = value };
         }
 
         private static IDisposable Push(object state) {

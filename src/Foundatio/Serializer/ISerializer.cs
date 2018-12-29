@@ -1,32 +1,75 @@
 ﻿using System;
+using System.IO;
 using System.Text;
-using System.Threading.Tasks;
-using Foundatio.Extensions;
 
 namespace Foundatio.Serializer {
     public interface ISerializer {
-        Task<object> DeserializeAsync(byte[] data, Type objectType);
-        Task<byte[]> SerializeAsync(object value);
+        object Deserialize(Stream data, Type objectType);
+        void Serialize(object value, Stream output);
+    }
+
+    public interface ITextSerializer : ISerializer {}
+
+    public static class DefaultSerializer {
+        public static ISerializer Instance { get; set; } = new MessagePackSerializer();
     }
 
     public static class SerializerExtensions {
-        public static Task<object> DeserializeAsync(this ISerializer serializer, string data, Type objectType) {
-            return serializer.DeserializeAsync(Encoding.UTF8.GetBytes(data ?? String.Empty), objectType);
+        public static T Deserialize<T>(this ISerializer serializer, Stream data) {
+            return (T)serializer.Deserialize(data, typeof(T));
         }
 
-        public static async Task<T> DeserializeAsync<T>(this ISerializer serializer, byte[] data) {
-            return (T)await serializer.DeserializeAsync(data, typeof(T)).AnyContext();
+        public static T Deserialize<T>(this ISerializer serializer, byte[] data) {
+            return (T)serializer.Deserialize(new MemoryStream(data), typeof(T));
         }
 
-        public static Task<T> DeserializeAsync<T>(this ISerializer serializer, string data) {
-            return DeserializeAsync<T>(serializer, Encoding.UTF8.GetBytes(data ?? String.Empty));
+        public static object Deserialize(this ISerializer serializer, byte[] data, Type objectType) {
+            return serializer.Deserialize(new MemoryStream(data), objectType);
         }
 
-        public static async Task<string> SerializeToStringAsync(this ISerializer serializer, object value) {
+        public static T Deserialize<T>(this ISerializer serializer, string data) {
+            byte[] bytes;
+            if (data == null)
+                bytes = Array.Empty<byte>();
+            else if (serializer is ITextSerializer)
+                bytes = Encoding.UTF8.GetBytes(data);
+            else
+                bytes = Convert.FromBase64String(data);
+
+            return (T)serializer.Deserialize(new MemoryStream(bytes), typeof(T));
+        }
+
+        public static object Deserialize(this ISerializer serializer, string data, Type objectType) {
+            byte[] bytes;
+            if (data == null)
+                bytes = Array.Empty<byte>();
+            else if (serializer is ITextSerializer)
+                bytes = Encoding.UTF8.GetBytes(data);
+            else
+                bytes = Convert.FromBase64String(data);
+
+            return serializer.Deserialize(new MemoryStream(bytes), objectType);
+        }
+
+        public static string SerializeToString<T>(this ISerializer serializer, T value) {
+            if (value == null) 
+                return null;
+
+            var bytes = serializer.SerializeToBytes(value);
+            if (serializer is ITextSerializer)
+                return Encoding.UTF8.GetString(bytes);
+
+            return Convert.ToBase64String(bytes); 
+        }
+
+        public static byte[] SerializeToBytes<T>(this ISerializer serializer, T value) {
             if (value == null)
                 return null;
 
-            return Encoding.UTF8.GetString(await serializer.SerializeAsync(value).AnyContext());
+            var stream = new MemoryStream();
+            serializer.Serialize(value, stream);
+
+            return stream.ToArray();
         }
     }
 }

@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Linq;
 
-namespace Foundatio.Extensions {
+namespace Foundatio.Utility {
     internal static class ExceptionExtensions {
         public static Exception GetInnermostException(this Exception exception) {
             if (exception == null)
@@ -18,8 +18,7 @@ namespace Foundatio.Extensions {
             if (exception == null)
                 return String.Empty;
 
-            var aggregateException = exception as AggregateException;
-            if (aggregateException != null)
+            if (exception is AggregateException aggregateException)
                 return String.Join(Environment.NewLine, aggregateException.Flatten().InnerExceptions.Where(ex => !String.IsNullOrEmpty(ex.GetInnermostException().Message)).Select(ex => ex.GetInnermostException().Message));
 
             return exception.GetInnermostException().Message;

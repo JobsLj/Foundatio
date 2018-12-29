@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Threading.Tasks;
-using Foundatio.Extensions;
 using Foundatio.Utility;
 
 namespace Foundatio.Queues {
@@ -27,30 +26,32 @@ namespace Foundatio.Queues {
         public TimeSpan ProcessingTime { get; set; }
         public DataDictionary Data { get; } = new DataDictionary();
 
+        void IQueueEntry<T>.MarkCompleted() {
+            IsCompleted = true;
+        }
+
+        void IQueueEntry<T>.MarkAbandoned() {
+            IsAbandoned = true;
+        }
+
         public Task RenewLockAsync() {
             RenewedTimeUtc = SystemClock.UtcNow;
             return _queue.RenewLockAsync(this);
         }
 
         public Task CompleteAsync() {
-            if (IsAbandoned || IsCompleted)
-                throw new InvalidOperationException("Queue entry has already been completed or abandoned.");
-
-            IsCompleted = true;
             return _queue.CompleteAsync(this);
         }
 
         public Task AbandonAsync() {
-            if (IsAbandoned || IsCompleted)
-                throw new InvalidOperationException("Queue entry has already been completed or abandoned.");
-
-            IsAbandoned = true;
             return _queue.AbandonAsync(this);
         }
 
-        public async Task DisposeAsync() {
+        public Task DisposeAsync() {
             if (!IsAbandoned && !IsCompleted)
-                await AbandonAsync().AnyContext();
+                return AbandonAsync();
+
+            return Task.CompletedTask;
         }
     }
 

@@ -1,7 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Linq;
 using System.Reflection;
-using Foundatio.Logging;
+using Microsoft.Extensions.Logging;
 
 namespace Foundatio.Utility {
     public static class TypeHelper {
@@ -25,19 +27,21 @@ namespace Foundatio.Utility {
         public static readonly Type Int64Type = typeof(long);
         public static readonly Type UInt64Type = typeof(ulong);
         public static readonly Type DoubleType = typeof(double);
-        
+
         public static Type ResolveType(string fullTypeName, Type expectedBase = null, ILogger logger = null) {
             if (String.IsNullOrEmpty(fullTypeName))
                 return null;
-            
+
             var type = Type.GetType(fullTypeName);
             if (type == null) {
-                logger?.Error("Unable to resolve type: \"{0}\".", fullTypeName);
+                if (logger != null && logger.IsEnabled(LogLevel.Error))
+                    logger.LogError("Unable to resolve type: {TypeFullName}.", fullTypeName);
                 return null;
             }
 
             if (expectedBase != null && !expectedBase.IsAssignableFrom(type)) {
-                logger?.Error("Type \"{0}\" must be assignable to type: \"{1}\".", fullTypeName, expectedBase.FullName);
+                if (logger != null && logger.IsEnabled(LogLevel.Error))
+                    logger.LogError("Type {TypeFullName} must be assignable to type: {ExpectedFullName}.", fullTypeName, expectedBase.FullName);
                 return null;
             }
 
@@ -63,8 +67,9 @@ namespace Foundatio.Utility {
         };
 
         public static string GetTypeDisplayName(Type type) {
+            string fullName = null;
             if (type.GetTypeInfo().IsGenericType) {
-                var fullName = type.GetGenericTypeDefinition().FullName;
+                fullName = type.GetGenericTypeDefinition().FullName;
 
                 // Nested types (public or private) have a '+' in their full name
                 var parts = fullName.Split('+');
@@ -73,10 +78,10 @@ namespace Foundatio.Utility {
                 // Examples:
                 // ConsoleApp.Program+Foo`1+Bar
                 // ConsoleApp.Program+Foo`1+Bar`1
-                for (var i = 0; i < parts.Length; i++) {
-                    var partName = parts[i];
+                for (int i = 0; i < parts.Length; i++) {
+                    string partName = parts[i];
 
-                    var backTickIndex = partName.IndexOf('`');
+                    int backTickIndex = partName.IndexOf('`');
                     if (backTickIndex >= 0) {
                         // Since '.' is typically used to filter log messages in a hierarchy kind of scenario,
                         // do not include any generic type information as part of the name.
@@ -90,16 +95,34 @@ namespace Foundatio.Utility {
                 }
 
                 return String.Join(".", parts);
-            } else if (_builtInTypeNames.ContainsKey(type)) {
-                return _builtInTypeNames[type];
-            } else {
-                var fullName = type.FullName;
-
-                if (type.IsNested)
-                    fullName = fullName.Replace('+', '.');
-
-                return fullName;
             }
+
+            if (_builtInTypeNames.ContainsKey(type))
+                return _builtInTypeNames[type];
+
+            fullName = type.FullName;
+            if (type.IsNested)
+                fullName = fullName.Replace('+', '.');
+
+            return fullName;
+        }
+
+        public static IEnumerable<Type> GetDerivedTypes<TAction>(IEnumerable<Assembly> assemblies = null) {
+            if (assemblies == null)
+                assemblies = AppDomain.CurrentDomain.GetAssemblies();
+
+            var types = new List<Type>();
+            foreach (var assembly in assemblies) {
+                try {
+                    types.AddRange(from type in assembly.GetTypes() where type.IsClass && !type.IsNotPublic && !type.IsAbstract && typeof(TAction).IsAssignableFrom(type) select type);
+                }
+                catch (ReflectionTypeLoadException ex) {
+                    string loaderMessages = String.Join(", ", ex.LoaderExceptions.ToList().Select(le => le.Message));
+                    Trace.TraceInformation("Unable to search types from assembly \"{0}\" for plugins of type \"{1}\": {2}", assembly.FullName, typeof(TAction).Name, loaderMessages);
+                }
+            }
+
+            return types;
         }
     }
 }

@@ -1,12 +1,11 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
-using Foundatio.Extensions;
 using Foundatio.Utility;
 
 namespace Foundatio.Lock {
     public interface ILockProvider {
-        Task<ILock> AcquireAsync(string name, TimeSpan? lockTimeout = null, CancellationToken cancellationToken = default(CancellationToken));
+        Task<ILock> AcquireAsync(string name, TimeSpan? lockTimeout = null, CancellationToken cancellationToken = default);
         Task<bool> IsLockedAsync(string name);
         Task ReleaseAsync(string name);
         Task RenewAsync(string name, TimeSpan? lockExtension = null);
@@ -18,11 +17,13 @@ namespace Foundatio.Lock {
     }
 
     public static class LockProviderExtensions {
-        public static Task<ILock> AcquireAsync(this ILockProvider provider, string name, TimeSpan? lockTimeout = null, TimeSpan? acquireTimeout = null) {
-            return provider.AcquireAsync(name, lockTimeout, acquireTimeout.ToCancellationToken(acquireTimeout ?? TimeSpan.FromSeconds(30)));
+        public static async Task<ILock> AcquireAsync(this ILockProvider provider, string name, TimeSpan? lockTimeout = null, TimeSpan? acquireTimeout = null) {
+            using (var cancellationTokenSource = acquireTimeout.ToCancellationTokenSource(TimeSpan.FromSeconds(30))) {
+                return await provider.AcquireAsync(name, lockTimeout, cancellationTokenSource.Token).AnyContext();
+            }
         }
 
-        public static async Task<bool> TryUsingAsync(this ILockProvider locker, string name, Func<CancellationToken, Task> work, TimeSpan? lockTimeout = null, CancellationToken cancellationToken = default(CancellationToken)) {
+        public static async Task<bool> TryUsingAsync(this ILockProvider locker, string name, Func<CancellationToken, Task> work, TimeSpan? lockTimeout = null, CancellationToken cancellationToken = default) {
             var l = await locker.AcquireAsync(name, lockTimeout, cancellationToken).AnyContext();
             if (l == null)
                 return false;
@@ -36,7 +37,7 @@ namespace Foundatio.Lock {
             return true;
         }
 
-        public static async Task<bool> TryUsingAsync(this ILockProvider locker, string name, Func<Task> work, TimeSpan? lockTimeout = null, CancellationToken cancellationToken = default(CancellationToken)) {
+        public static async Task<bool> TryUsingAsync(this ILockProvider locker, string name, Func<Task> work, TimeSpan? lockTimeout = null, CancellationToken cancellationToken = default) {
             var l = await locker.AcquireAsync(name, lockTimeout, cancellationToken).AnyContext();
             if (l == null)
                 return false;
@@ -51,30 +52,32 @@ namespace Foundatio.Lock {
         }
 
         public static async Task<bool> TryUsingAsync(this ILockProvider locker, string name, Func<CancellationToken, Task> work, TimeSpan? lockTimeout = null, TimeSpan? acquireTimeout = null) {
-            var cancellationToken = acquireTimeout?.ToCancellationToken() ?? default(CancellationToken);
-            var l = await locker.AcquireAsync(name, lockTimeout, cancellationToken).AnyContext();
-            if (l == null)
-                return false;
+            using (var cancellationTokenSource = acquireTimeout.ToCancellationTokenSource()) {
+                var l = await locker.AcquireAsync(name, lockTimeout, cancellationTokenSource.Token).AnyContext();
+                if (l == null)
+                    return false;
 
-            try {
-                await work(cancellationToken).AnyContext();
-            } finally {
-                await l.ReleaseAsync().AnyContext();
+                try {
+                    await work(cancellationTokenSource.Token).AnyContext();
+                } finally {
+                    await l.ReleaseAsync().AnyContext();
+                }
             }
 
             return true;
         }
 
         public static async Task<bool> TryUsingAsync(this ILockProvider locker, string name, Func<Task> work, TimeSpan? lockTimeout = null, TimeSpan? acquireTimeout = null) {
-            var cancellationToken = acquireTimeout?.ToCancellationToken() ?? default(CancellationToken);
-            var l = await locker.AcquireAsync(name, lockTimeout, cancellationToken).AnyContext();
-            if (l == null)
-                return false;
+            using (var cancellationTokenSource = acquireTimeout.ToCancellationTokenSource()) {
+                var l = await locker.AcquireAsync(name, lockTimeout, cancellationTokenSource.Token).AnyContext();
+                if (l == null)
+                    return false;
 
-            try {
-                await work().AnyContext();
-            } finally {
-                await l.ReleaseAsync().AnyContext();
+                try {
+                    await work().AnyContext();
+                } finally {
+                    await l.ReleaseAsync().AnyContext();
+                }
             }
 
             return true;

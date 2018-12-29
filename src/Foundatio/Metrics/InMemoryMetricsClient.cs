@@ -1,10 +1,15 @@
 ﻿using System;
 using Foundatio.Caching;
-using Foundatio.Logging;
 
 namespace Foundatio.Metrics {
     public class InMemoryMetricsClient : CacheBucketMetricsClientBase {
-        public InMemoryMetricsClient(bool buffered = true, string prefix = null, ILoggerFactory loggerFactory = null) : base(new InMemoryCacheClient(loggerFactory), buffered, prefix, loggerFactory) { }
+        public InMemoryMetricsClient() : this(o => o) {}
+        
+        public InMemoryMetricsClient(InMemoryMetricsClientOptions options) 
+            : base(new InMemoryCacheClient(new InMemoryCacheClientOptions { LoggerFactory = options?.LoggerFactory }), options) { }
+
+        public InMemoryMetricsClient(Builder<InMemoryMetricsClientOptionsBuilder, InMemoryMetricsClientOptions> config)
+            : this(config(new InMemoryMetricsClientOptionsBuilder()).Build()) { }
 
         public override void Dispose() {
             base.Dispose();

@@ -1,14 +1,13 @@
 ﻿using System;
 using System.ComponentModel;
 using System.Reflection;
-using Foundatio.Utility;
 
-namespace Foundatio.Extensions {
+namespace Foundatio.Utility {
     internal static class TypeExtensions {
         public static bool IsNumeric(this Type type) {
             if (type.IsArray)
                 return false;
-            
+
             if (type == TypeHelper.ByteType ||
                 type == TypeHelper.DecimalType ||
                 type == TypeHelper.DoubleType ||
@@ -21,7 +20,7 @@ namespace Foundatio.Extensions {
                 type == TypeHelper.UInt32Type ||
                 type == TypeHelper.UInt64Type)
                 return true;
-            
+
             switch (Type.GetTypeCode(type)) {
                 case TypeCode.Byte:
                 case TypeCode.Decimal:
@@ -40,7 +39,6 @@ namespace Foundatio.Extensions {
             return false;
         }
 
-
         public static bool IsNullableNumeric(this Type type) {
             if (type.IsArray)
                 return false;
@@ -50,17 +48,22 @@ namespace Foundatio.Extensions {
         }
 
         public static T ToType<T>(this object value) {
-            if (value == null)
-                throw new ArgumentNullException(nameof(value));
+            var targetType = typeof(T);
+            if (value == null) {
+                try {
+                    return (T)Convert.ChangeType(value, targetType);
+                } catch {
+                    throw new ArgumentNullException(nameof(value));
+                }
+            }
 
-            Type targetType = typeof(T);
-            TypeConverter converter = TypeDescriptor.GetConverter(targetType);
-            Type valueType = value.GetType();
+            var converter = TypeDescriptor.GetConverter(targetType);
+            var valueType = value.GetType();
 
             if (targetType.IsAssignableFrom(valueType))
                 return (T)value;
 
-            TypeInfo targetTypeInfo = targetType.GetTypeInfo();
+            var targetTypeInfo = targetType.GetTypeInfo();
             if (targetTypeInfo.IsEnum && (value is string || valueType.GetTypeInfo().IsEnum)) {
                 // attempt to match enum by name.
                 if (EnumExtensions.TryEnumIsDefined(targetType, value.ToString())) {
@@ -68,7 +71,7 @@ namespace Foundatio.Extensions {
                     return (T)parsedValue;
                 }
 
-                var message = $"The Enum value of '{value}' is not defined as a valid value for '{targetType.FullName}'.";
+                string message = $"The Enum value of '{value}' is not defined as a valid value for '{targetType.FullName}'.";
                 throw new ArgumentException(message);
             }
 

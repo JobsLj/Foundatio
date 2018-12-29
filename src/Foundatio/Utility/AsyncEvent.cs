@@ -2,7 +2,6 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
-using Foundatio.Extensions;
 
 namespace Foundatio.Utility {
     public class AsyncEvent<TEventArgs> : IObservable<TEventArgs>, IDisposable where TEventArgs : EventArgs {
@@ -12,7 +11,9 @@ namespace Foundatio.Utility {
 
         public AsyncEvent(bool parallelInvoke = false) {
             _parallelInvoke = parallelInvoke;
-        } 
+        }
+
+        public bool HasHandlers => _invocationList.Count > 0;
 
         public IDisposable AddHandler(Func<object, TEventArgs, Task> callback) {
             if (callback == null)

@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 namespace Foundatio.Caching {
     public class NullCacheClient : ICacheClient {
         public static readonly NullCacheClient Instance = new NullCacheClient();
-        
+
         public Task<int> RemoveAllAsync(IEnumerable<string> keys = null) {
             return Task.FromResult(0);
         }
@@ -19,7 +19,7 @@ namespace Foundatio.Caching {
             return Task.FromResult(CacheValue<T>.NoValue);
         }
 
-        public Task<IDictionary<string, CacheValue<T>>> GetAllAsync<T>(IEnumerable<string> keys) { 
+        public Task<IDictionary<string, CacheValue<T>>> GetAllAsync<T>(IEnumerable<string> keys) {
             return Task.FromResult<IDictionary<string, CacheValue<T>>>(keys.ToDictionary(k => k, k => CacheValue<T>.NoValue));
         }
 
@@ -39,7 +39,11 @@ namespace Foundatio.Caching {
             return Task.FromResult(true);
         }
 
-        public Task<double> IncrementAsync(string key, double amount = 1, TimeSpan? expiresIn = null) {
+        public Task<double> IncrementAsync(string key, double amount, TimeSpan? expiresIn = null) {
+            return Task.FromResult(amount);
+        }
+
+        public Task<long> IncrementAsync(string key, long amount, TimeSpan? expiresIn = null) {
             return Task.FromResult(amount);
         }
 
@@ -59,7 +63,15 @@ namespace Foundatio.Caching {
             return Task.FromResult(value);
         }
 
+        public Task<long> SetIfHigherAsync(string key, long value, TimeSpan? expiresIn = null) {
+            return Task.FromResult(value);
+        }
+
         public Task<double> SetIfLowerAsync(string key, double value, TimeSpan? expiresIn = null) {
+            return Task.FromResult(value);
+        }
+
+        public Task<long> SetIfLowerAsync(string key, long value, TimeSpan? expiresIn = null) {
             return Task.FromResult(value);
         }
 

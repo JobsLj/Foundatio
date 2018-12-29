@@ -1,64 +1,65 @@
 ﻿using System;
 using Foundatio.Caching;
-using Foundatio.Logging;
 using Foundatio.Messaging;
-using Nito.AsyncEx;
+using Foundatio.AsyncEx;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using Foundatio.Extensions;
 using Foundatio.Utility;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Foundatio.Lock {
     public class CacheLockProvider : ILockProvider {
         private readonly ICacheClient _cacheClient;
         private readonly IMessageBus _messageBus;
-        private readonly ConcurrentDictionary<string, AsyncMonitor> _monitors = new ConcurrentDictionary<string, AsyncMonitor>();
-        private static readonly object _lockObject = new object();
+        private readonly ConcurrentDictionary<string, AsyncAutoResetEvent> _autoResetEvents = new ConcurrentDictionary<string, AsyncAutoResetEvent>();
+        private readonly AsyncLock _lock = new AsyncLock();
         private bool _isSubscribed;
-        protected readonly ILogger _logger;
+        private readonly ILogger _logger;
 
         public CacheLockProvider(ICacheClient cacheClient, IMessageBus messageBus, ILoggerFactory loggerFactory = null) {
-            _logger = loggerFactory.CreateLogger<CacheLockProvider>();
+            _logger = loggerFactory?.CreateLogger<CacheLockProvider>() ?? NullLogger<CacheLockProvider>.Instance;
             _cacheClient = new ScopedCacheClient(cacheClient, "lock");
             _messageBus = messageBus;
         }
 
-        private void EnsureTopicSubscription() {
+        private async Task EnsureTopicSubscriptionAsync() {
             if (_isSubscribed)
                 return;
 
-            lock (_lockObject) {
+            using (await _lock.LockAsync().AnyContext()) {
                 if (_isSubscribed)
                     return;
-                
-                _logger.Trace("Subscribing to cache lock released.");
-                _messageBus.Subscribe<CacheLockReleased>(OnLockReleasedAsync);
+
+                bool isTraceLogLevelEnabled = _logger.IsEnabled(LogLevel.Trace);
+                if (isTraceLogLevelEnabled) _logger.LogTrace("Subscribing to cache lock released.");
+                await _messageBus.SubscribeAsync<CacheLockReleased>(OnLockReleasedAsync).AnyContext();
                 _isSubscribed = true;
+                if (isTraceLogLevelEnabled) _logger.LogTrace("Subscribed to cache lock released.");
             }
         }
 
-        private async Task OnLockReleasedAsync(CacheLockReleased msg, CancellationToken cancellationToken = default(CancellationToken)) {
-            _logger.Trace("Got lock released message: {Name}", msg.Name);
+        private Task OnLockReleasedAsync(CacheLockReleased msg, CancellationToken cancellationToken = default) {
+            if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("Got lock released message: {Name}", msg.Name);
+            if (_autoResetEvents.TryGetValue(msg.Name, out var autoResetEvent))
+                autoResetEvent.Set();
 
-            AsyncMonitor monitor;
-            if (!_monitors.TryGetValue(msg.Name, out monitor))
-                return;
-
-            using (await monitor.EnterAsync())
-                monitor.Pulse();
+            return Task.CompletedTask;
         }
 
-        public async Task<ILock> AcquireAsync(string name, TimeSpan? lockTimeout = null, CancellationToken cancellationToken = default(CancellationToken)) {
-            _logger.Trace(() => $"AcquireAsync Name: {name} WillWait: {!cancellationToken.IsCancellationRequested}");
+        public async Task<ILock> AcquireAsync(string name, TimeSpan? lockTimeout = null, CancellationToken cancellationToken = default) {
+            bool isTraceLogLevelEnabled = _logger.IsEnabled(LogLevel.Trace);
+            if (isTraceLogLevelEnabled)
+                _logger.LogTrace("AcquireAsync Name: {Name} WillWait: {WillWait}", name, !cancellationToken.IsCancellationRequested);
 
             if (!cancellationToken.IsCancellationRequested)
-                EnsureTopicSubscription();
+                await EnsureTopicSubscriptionAsync().AnyContext();
 
             if (!lockTimeout.HasValue)
                 lockTimeout = TimeSpan.FromMinutes(20);
-            
+
             bool allowLock = false;
 
             do {
@@ -73,50 +74,51 @@ namespace Foundatio.Lock {
 
                 if (gotLock) {
                     allowLock = true;
-                    _logger.Trace("Acquired lock: {name}", name);
+                    if (isTraceLogLevelEnabled) _logger.LogTrace("Acquired lock: {Name}", name);
 
                     break;
                 }
 
-                _logger.Trace("Failed to acquire lock: {name}", name);
+                if (isTraceLogLevelEnabled) _logger.LogTrace("Failed to acquire lock: {Name}", name);
                 if (cancellationToken.IsCancellationRequested) {
-                    _logger.Trace("Cancellation requested");
+                    if (isTraceLogLevelEnabled) _logger.LogTrace("Cancellation requested");
                     break;
                 }
 
-                var keyExpiration = SystemClock.UtcNow.Add(await _cacheClient.GetExpirationAsync(name).AnyContext() ?? TimeSpan.Zero);
+                var keyExpiration = SystemClock.UtcNow.SafeAdd(await _cacheClient.GetExpirationAsync(name).AnyContext() ?? TimeSpan.Zero);
                 var delayAmount = keyExpiration.Subtract(SystemClock.UtcNow).Max(TimeSpan.FromMilliseconds(50));
 
-                _logger.Trace("Delay amount: {0} Delay until: {1}", delayAmount, SystemClock.UtcNow.Add(delayAmount).ToString("mm:ss.fff"));
+                if (isTraceLogLevelEnabled)
+                    _logger.LogTrace("Delay amount: {Delay} Delay until: {DelayUntil}", delayAmount, SystemClock.UtcNow.SafeAdd(delayAmount).ToString("mm:ss.fff"));
 
-                var delayCancellationTokenSource = new CancellationTokenSource(delayAmount);
-                var linkedCancellationToken = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, delayCancellationTokenSource.Token).Token;
+                using (var delayCancellationTokenSource = new CancellationTokenSource(delayAmount))
+                using (var linkedCancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, delayCancellationTokenSource.Token)) {
+                    var autoResetEvent = _autoResetEvents.GetOrAdd(name, new AsyncAutoResetEvent());
+                    var sw = Stopwatch.StartNew();
 
-                var monitor = _monitors.GetOrAdd(name, new AsyncMonitor());
-                var sw = Stopwatch.StartNew();
-
-                try {
-                    using (await monitor.EnterAsync(linkedCancellationToken))
-                        await monitor.WaitAsync(linkedCancellationToken).AnyContext();
-                } catch (TaskCanceledException) {
-                    if (delayCancellationTokenSource.IsCancellationRequested) {
-                        _logger.Trace("Retrying: Delay exceeded. Cancellation requested: {0}", cancellationToken.IsCancellationRequested);
-                        continue;
+                    try {
+                        await autoResetEvent.WaitAsync(linkedCancellationTokenSource.Token).AnyContext();
+                    } catch (OperationCanceledException) {
+                        if (delayCancellationTokenSource.IsCancellationRequested) {
+                            if (isTraceLogLevelEnabled)
+                                _logger.LogTrace("Retrying: Delay exceeded. Cancellation requested: {IsCancellationRequested}", cancellationToken.IsCancellationRequested);
+                            continue;
+                        }
+                    } finally {
+                        sw.Stop();
+                        if (isTraceLogLevelEnabled)
+                            _logger.LogTrace("Lock {Name} waited {Milliseconds}ms", name, sw.ElapsedMilliseconds);
                     }
-                } finally {
-                    sw.Stop();
-                    _logger.Trace("Lock {name} waited {milliseconds}ms", name, sw.ElapsedMilliseconds);
                 }
             } while (!cancellationToken.IsCancellationRequested);
 
-            if (cancellationToken.IsCancellationRequested)
-                _logger.Trace("Cancellation requested.");
+            if (cancellationToken.IsCancellationRequested && isTraceLogLevelEnabled)
+                _logger.LogTrace("Cancellation requested.");
 
             if (!allowLock)
                 return null;
 
-            _logger.Trace("Returning lock: {name}", name);
-
+            if (isTraceLogLevelEnabled)_logger.LogTrace("Returning lock: {Name}", name);
             return new DisposableLock(name, this, _logger);
         }
 
@@ -126,24 +128,25 @@ namespace Foundatio.Lock {
         }
 
         public async Task ReleaseAsync(string name) {
-            _logger.Trace("ReleaseAsync Start: {name}", name);
+            bool isTraceLogLevelEnabled = _logger.IsEnabled(LogLevel.Trace);
+            if (isTraceLogLevelEnabled) _logger.LogTrace("ReleaseAsync Start: {Name}", name);
 
             await Run.WithRetriesAsync(() => _cacheClient.RemoveAsync(name), 15, logger: _logger).AnyContext();
             await _messageBus.PublishAsync(new CacheLockReleased { Name = name }).AnyContext();
 
-            _logger.Trace("ReleaseAsync Complete: {name}", name);
+            if (isTraceLogLevelEnabled) _logger.LogTrace("ReleaseAsync Complete: {Name}", name);
         }
 
-        public async Task RenewAsync(String name, TimeSpan? lockExtension = null) {
-            _logger.Trace("RenewAsync: {0}", name);
+        public Task RenewAsync(string name, TimeSpan? lockExtension = null) {
+            if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("RenewAsync: {Name}", name);
             if (!lockExtension.HasValue)
                 lockExtension = TimeSpan.FromMinutes(20);
 
-            await Run.WithRetriesAsync(() => _cacheClient.SetExpirationAsync(name, lockExtension.Value)).AnyContext();
+            return Run.WithRetriesAsync(() => _cacheClient.SetExpirationAsync(name, lockExtension.Value));
         }
     }
 
-    internal class CacheLockReleased {
+    public class CacheLockReleased {
         public string Name { get; set; }
     }
 }

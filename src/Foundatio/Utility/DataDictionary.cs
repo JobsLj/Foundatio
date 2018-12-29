@@ -1,9 +1,5 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Linq;
-using Foundatio.Extensions;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
 
 namespace Foundatio.Utility {
     public class DataDictionary : Dictionary<string, object> {
@@ -17,18 +13,15 @@ namespace Foundatio.Utility {
         }
 
         public object GetValueOrDefault(string key) {
-            object value;
-            return TryGetValue(key, out value) ? value : null;
+            return TryGetValue(key, out object value) ? value : null;
         }
 
         public object GetValueOrDefault(string key, object defaultValue) {
-            object value;
-            return TryGetValue(key, out value) ? value : defaultValue;
+            return TryGetValue(key, out object value) ? value : defaultValue;
         }
 
         public object GetValueOrDefault(string key, Func<object> defaultValueProvider) {
-            object value;
-            return TryGetValue(key, out value) ? value : defaultValueProvider();
+            return TryGetValue(key, out object value) ? value : defaultValueProvider();
         }
 
         public T GetValue<T>(string key) {
@@ -38,7 +31,7 @@ namespace Foundatio.Utility {
             return GetValueOrDefault<T>(key);
         }
 
-        public T GetValueOrDefault<T>(string key, T defaultValue = default(T)) {
+        public T GetValueOrDefault<T>(string key, T defaultValue = default) {
             if (!ContainsKey(key))
                 return defaultValue;
 
@@ -46,17 +39,8 @@ namespace Foundatio.Utility {
             if (data is T)
                 return (T)data;
 
-            if (data is string) {
-                try {
-                    return JsonConvert.DeserializeObject<T>((string)data);
-                } catch {}
-            }
-
-            if (data is JObject) {
-                try {
-                    return JsonConvert.DeserializeObject<T>(data.ToString());
-                } catch {}
-            }
+            if (data == null)
+                return defaultValue;
 
             try {
                 return data.ToType<T>();
@@ -70,9 +54,7 @@ namespace Foundatio.Utility {
         }
 
         public string GetString(string name, string @default) {
-            object value;
-
-            if (!TryGetValue(name, out value))
+            if (!TryGetValue(name, out object value))
                 return @default;
 
             if (value is string)
